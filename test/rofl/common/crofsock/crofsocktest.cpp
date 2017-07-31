@@ -22,6 +22,7 @@ void crofsocktest::setUp() { baddr = rofl::csockaddr(AF_INET, "0.0.0.0", 0); }
 void crofsocktest::tearDown() {}
 
 void crofsocktest::test() {
+  thread.start("rofsocktest");
   try {
     for (unsigned int i = 0; i < 2; i++) {
       test_mode = TEST_MODE_TCP;
@@ -30,8 +31,8 @@ void crofsocktest::test() {
       msg_counter = 0;
       listening_port = 0;
 
-      slisten = new rofl::crofsock(this);
-      sclient = new rofl::crofsock(this);
+      slisten = new rofl::crofsock(&thread, this);
+      sclient = new rofl::crofsock(&thread, this);
 
       /* try to find idle port for test */
       bool lookup_idle_port = true;
@@ -84,17 +85,19 @@ void crofsocktest::test() {
     LOG(INFO) << "crofsocktest::test() exception, what: " << e.what()
               << std::endl;
   }
+  thread.stop();
 }
 
 void crofsocktest::test_tls() {
+  thread.start("rofsocktest_tls");
   try {
     test_mode = TEST_MODE_TLS;
     keep_running = true;
     timeout = 60;
     msg_counter = 0;
 
-    slisten = new rofl::crofsock(this);
-    sclient = new rofl::crofsock(this);
+    slisten = new rofl::crofsock(&thread, this);
+    sclient = new rofl::crofsock(&thread, this);
 
     /* try to find idle port for test */
     bool lookup_idle_port = true;
@@ -142,6 +145,7 @@ void crofsocktest::test_tls() {
     LOG(INFO) << "crofsocktest::test() exception, what: " << e.what()
               << std::endl;
   }
+  thread.stop();
 }
 
 void crofsocktest::handle_listen(rofl::crofsock &socket) {
@@ -151,7 +155,7 @@ void crofsocktest::handle_listen(rofl::crofsock &socket) {
 
     LOG(INFO) << "crofsocktest::handle_listen() sd=" << sd << std::endl;
 
-    sserver = new rofl::crofsock(this);
+    sserver = new rofl::crofsock(&thread, this);
 
     switch (test_mode) {
     case TEST_MODE_TCP: {

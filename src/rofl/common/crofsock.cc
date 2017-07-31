@@ -14,7 +14,12 @@
 
 #include <glog/logging.h>
 
-using namespace rofl;
+#define PTR_TO_INT(ptr) ((int)((intptr_t)(ptr)))
+#define INT_TO_PTR(i) ((void *)((intptr_t)(i)))
+
+namespace rofl {
+
+enum sock_use { sock_rx = 1, sock_tx };
 
 /*static*/ std::set<crofsock_env *> crofsock_env::socket_envs;
 /*static*/ crwlock crofsock_env::socket_envs_lock;
@@ -22,15 +27,14 @@ using namespace rofl;
 /*static*/ bool crofsock::tls_initialized = false;
 
 crofsock::~crofsock() {
-  txthread.stop();
-  rxthread.stop();
+  thread->remove_wakeup_observer(this, rx_wh); // rx
+  thread->remove_wakeup_observer(this, tx_wh); // tx
   close();
 }
 
-crofsock::crofsock(crofsock_env *env)
-    : env(env), state(STATE_IDLE), mode(MODE_UNKNOWN), rxthread(this),
-      txthread(this), reconnect_backoff_max(60 /*secs*/),
-      reconnect_backoff_start(1 /*secs*/),
+crofsock::crofsock(cthread *thread, crofsock_env *env)
+    : env(env), state(STATE_IDLE), mode(MODE_UNKNOWN), thread(thread),
+      reconnect_backoff_max(60 /*secs*/), reconnect_backoff_start(1 /*secs*/),
       reconnect_backoff_current(1 /*secs*/), reconnect_counter(0), sd(-1),
       domain(AF_INET), type(SOCK_STREAM), protocol(IPPROTO_TCP), backlog(64),
       ctx(NULL), ssl(NULL), bio(NULL), capath("."), cafile("ca.pem"),
@@ -51,8 +55,8 @@ crofsock::crofsock(crofsock_env *env)
   txweights[QUEUE_FLOW] = 16;
   txweights[QUEUE_PKT] = 8;
 
-  rxthread.start("crofsock_rx");
-  txthread.start("crofsock_tx");
+  thread->add_wakeup_observer(this, &rx_wh, INT_TO_PTR(sock_rx)); // rx
+  thread->add_wakeup_observer(this, &tx_wh, INT_TO_PTR(sock_tx)); // tx
 }
 
 void crofsock::close() {
@@ -83,9 +87,9 @@ void crofsock::close() {
             << " raddr=" << raddr.str();
 
     if (sd > 0) {
-      rxthread.drop_read_fd(sd);
-      rxthread.drop_fd(sd);
-      txthread.drop_fd(sd);
+      thread->drop_read_fd(sd); // rx
+      thread->drop_fd(sd);      // rx
+      thread->drop_fd(sd);      // tx
       ::close(sd);
       sd = -1;
     }
@@ -100,12 +104,12 @@ void crofsock::close() {
     VLOG(2) << __FUNCTION__ << " STATE_TCP_CONNECTING laddr=" << laddr.str()
             << " raddr=" << raddr.str();
 
-    txthread.drop_timer(TIMER_ID_RECONNECT);
+    thread->drop_timer(TIMER_ID_RECONNECT); // tx
 
     if (sd > 0) {
-      rxthread.drop_write_fd(sd);
-      rxthread.drop_fd(sd);
-      txthread.drop_fd(sd);
+      thread->drop_write_fd(sd); // rx
+      thread->drop_fd(sd);       // rx
+      thread->drop_fd(sd);       // tx
       ::close(sd);
       sd = -1;
     }
@@ -121,12 +125,12 @@ void crofsock::close() {
             << " raddr=" << raddr.str();
 
     if (sd > 0) {
-      rxthread.drop_read_fd(sd, false);
+      thread->drop_read_fd(sd, false); // rx
       if (flag_test(FLAG_CONGESTED)) {
-        txthread.drop_write_fd(sd);
+        thread->drop_write_fd(sd); // tx
       }
-      rxthread.drop_fd(sd);
-      txthread.drop_fd(sd);
+      thread->drop_fd(sd); // rx
+      thread->drop_fd(sd); // tx
       ::close(sd);
       sd = -1;
     }
@@ -145,17 +149,17 @@ void crofsock::close() {
     rx_disable();
     tx_disable();
 
-    rxthread.drop_read_fd(sd, false);
+    thread->drop_read_fd(sd, false); // rx
     if (flag_test(FLAG_CONGESTED)) {
-      txthread.drop_write_fd(sd);
+      thread->drop_write_fd(sd); // tx
     }
     shutdown(sd, O_RDWR);
 
     /* allow socket to send shutdown notification to peer */
     /* sleep(1); // use SO_LINGER option instead */
     if (sd > 0) {
-      rxthread.drop_fd(sd);
-      txthread.drop_fd(sd);
+      thread->drop_fd(sd); // rx
+      thread->drop_fd(sd); // tx
       ::close(sd);
     }
     sd = -1;
@@ -238,7 +242,7 @@ void crofsock::listen() {
   }
 
   /* cancel potentially pending reconnect timer */
-  rxthread.drop_timer(TIMER_ID_RECONNECT);
+  thread->drop_timer(TIMER_ID_RECONNECT); // rx
 
   /* socket in server mode */
   mode = MODE_LISTEN;
@@ -319,8 +323,8 @@ void crofsock::listen() {
   VLOG(2) << __FUNCTION__ << " STATE_LISTENING";
 
   /* instruct rxthread to read from socket descriptor */
-  rxthread.add_fd(sd);
-  rxthread.add_read_fd(sd);
+  thread->add_fd(sd);                                 // rx
+  thread->add_read_fd(sd, this, INT_TO_PTR(sock_rx)); // rx
 }
 
 std::list<int> crofsock::accept() {
@@ -360,7 +364,7 @@ void crofsock::tcp_accept(int sd) {
   }
 
   /* cancel potentially pending reconnect timer */
-  rxthread.drop_timer(TIMER_ID_RECONNECT);
+  thread->drop_timer(TIMER_ID_RECONNECT); // rx
 
   /* socket in server mode */
   mode = MODE_SERVER;
@@ -466,10 +470,10 @@ void crofsock::tcp_accept(int sd) {
   }
 
   /* instruct rxthread to read from socket descriptor */
-  rxthread.add_fd(sd);
-  rxthread.add_read_fd(sd);
+  thread->add_fd(sd);                                 // rx
+  thread->add_read_fd(sd, this, INT_TO_PTR(sock_rx)); // rx
 
-  rxthread.wakeup();
+  thread->notify_wake(rx_wh); // rx
 }
 
 void crofsock::tcp_connect(bool reconnect) {
@@ -485,7 +489,7 @@ void crofsock::tcp_connect(bool reconnect) {
   }
 
   /* cancel potentially pending reconnect timer */
-  rxthread.drop_timer(TIMER_ID_RECONNECT);
+  thread->drop_timer(TIMER_ID_RECONNECT); // rx
 
   /* we do an active connect */
   mode = MODE_CLIENT;
@@ -566,7 +570,7 @@ void crofsock::tcp_connect(bool reconnect) {
     case EINPROGRESS: {
       VLOG(2) << __FUNCTION__ << " TCP: EINPROGRESS";
       /* register socket descriptor for write operations */
-      rxthread.add_write_fd(sd);
+      thread->add_write_fd(sd, this, INT_TO_PTR(sock_rx)); // rx
     } break;
     case ECONNREFUSED: {
       VLOG(2) << __FUNCTION__ << " TCP: ECONNREFUSED";
@@ -609,10 +613,10 @@ void crofsock::tcp_connect(bool reconnect) {
             << " raddr=" << raddr.str();
 
     /* register socket descriptor for read operations */
-    rxthread.add_fd(sd);
-    rxthread.add_read_fd(sd);
+    thread->add_fd(sd);                                 // rx
+    thread->add_read_fd(sd, this, INT_TO_PTR(sock_rx)); // rx
 
-    rxthread.wakeup();
+    thread->notify_wake(rx_wh); // rx
 
     if (flag_test(FLAG_TLS_IN_USE)) {
       crofsock::tls_connect(flag_test(FLAG_RECONNECT_ON_FAILURE));
@@ -1192,7 +1196,7 @@ void crofsock::tls_log_errors() {
 }
 
 void crofsock::backoff_reconnect(bool reset_timeout) {
-  if (rxthread.has_timer(TIMER_ID_RECONNECT)) {
+  if (thread->has_timer(TIMER_ID_RECONNECT)) { // rx
     return;
   }
 
@@ -1214,8 +1218,8 @@ void crofsock::backoff_reconnect(bool reset_timeout) {
           << " scheduled reconnect in: " << reconnect_backoff_current << " secs"
           << " laddr" << laddr.str() << " raddr=" << raddr.str();
 
-  rxthread.add_timer(TIMER_ID_RECONNECT,
-                     ctimespec().expire_in(reconnect_backoff_current, 0));
+  thread->add_timer(this, TIMER_ID_RECONNECT, // rx
+                    ctimespec().expire_in(reconnect_backoff_current, 0));
 
   ++reconnect_counter;
 }
@@ -1237,7 +1241,7 @@ void crofsock::rx_disable() {
   switch (state) {
   case STATE_TCP_ESTABLISHED:
   case STATE_TLS_ESTABLISHED: {
-    rxthread.drop_read_fd(sd, false);
+    thread->drop_read_fd(sd, false); // rx
     VLOG(2) << __FUNCTION__ << " disable reception laddr=" << laddr.str()
             << " raddr=" << raddr.str();
   } break;
@@ -1250,10 +1254,10 @@ void crofsock::rx_enable() {
   switch (state) {
   case STATE_TCP_ESTABLISHED:
   case STATE_TLS_ESTABLISHED: {
-    rxthread.add_read_fd(sd, false);
+    thread->add_read_fd(sd, this, INT_TO_PTR(sock_rx), false); // rx
     VLOG(2) << __FUNCTION__ << " enable reception"
             << " laddr=" << laddr.str() << " raddr=" << raddr.str();
-    rxthread.wakeup();
+    thread->notify_wake(rx_wh); // rx
   } break;
   default: {};
   }
@@ -1269,10 +1273,11 @@ void crofsock::tx_enable() {
   tx_disabled = false;
   VLOG(2) << __FUNCTION__ << " enable transmission laddr=" << laddr.str()
           << " raddr=" << raddr.str();
-  txthread.wakeup();
+  thread->notify_wake(tx_wh); // tx
 }
 
-void crofsock::handle_timeout(cthread &thread, uint32_t timer_id) {
+void crofsock::handle_timeout(void *userdata) {
+  int timer_id = (long)userdata;
   switch (timer_id) {
   case TIMER_ID_RECONNECT: {
     VLOG(2) << __FUNCTION__ << " TCP: reconnecting laddr=" << laddr.str()
@@ -1390,7 +1395,7 @@ crofsock::msg_result_t crofsock::send_message(rofl::openflow::cofmsg *msg,
     txqueue_pending_pkts++;
 
     if (not tx_is_running) {
-      txthread.wakeup();
+      thread->notify_wake(tx_wh); // tx
     }
 
     if (flag_test(FLAG_TX_BLOCK_QUEUEING)) {
@@ -1413,27 +1418,30 @@ crofsock::msg_result_t crofsock::send_message(rofl::openflow::cofmsg *msg,
   }
 }
 
-void crofsock::handle_wakeup(cthread &thread) {
-  if (&thread == &rxthread) {
+void crofsock::handle_wakeup(void *userdata) {
+  assert(userdata);
+  if (PTR_TO_INT(userdata) == sock_rx) {
     recv_message();
-  } else if (&thread == &txthread) {
+  } else if (PTR_TO_INT(userdata) == sock_tx) {
     send_from_queue();
   }
 }
 
-void crofsock::handle_write_event(cthread &thread, int fd) {
+void crofsock::handle_write(int fd, void *userdata) {
+  assert(userdata);
+
   if (state <= STATE_CLOSED) {
     return;
   }
 
-  if (&thread == &txthread) {
+  if (PTR_TO_INT(userdata) == sock_tx) {
     assert(fd == sd);
     flag_set(FLAG_CONGESTED, false);
-    txthread.drop_write_fd(sd);
+    thread->drop_write_fd(sd); // tx
     send_from_queue();
-  } else if (&thread == &rxthread) {
+  } else if (PTR_TO_INT(userdata) == sock_rx) {
     assert(fd == sd);
-    handle_read_event_rxthread(thread, fd);
+    handle_read_event_rxthread(fd);
   }
 }
 
@@ -1499,7 +1507,7 @@ void crofsock::send_from_queue() {
             tx_is_running = false;
             tx_fragment_pending = true;
             flag_set(FLAG_CONGESTED, true);
-            txthread.add_write_fd(sd);
+            thread->add_write_fd(sd, this, INT_TO_PTR(sock_tx)); // tx
 
             if (not flag_test(FLAG_TX_BLOCK_QUEUEING)) {
               /* block transmission of further packets */
@@ -1577,17 +1585,19 @@ void crofsock::send_from_queue() {
   tx_is_running = false;
 
   if ((txqueue_pending_pkts > 0) && (not flag_test(FLAG_TX_BLOCK_QUEUEING))) {
-    txthread.wakeup();
+    thread->notify_wake(tx_wh); // tx
   }
 }
 
-void crofsock::handle_read_event(cthread &thread, int fd) {
-  if (&thread == &rxthread) {
-    handle_read_event_rxthread(thread, fd);
+void crofsock::handle_read(int fd, void *userdata) {
+  assert(userdata);
+  VLOG(2) << __FUNCTION__ << " read from fd=" << fd << " userdata=" << userdata;
+  if (PTR_TO_INT(userdata) == sock_rx) {
+    handle_read_event_rxthread(fd);
   }
 }
 
-void crofsock::handle_read_event_rxthread(cthread &thread, int fd) {
+void crofsock::handle_read_event_rxthread(int fd) {
   try {
     switch (state) {
     case STATE_LISTENING: {
@@ -1613,7 +1623,7 @@ void crofsock::handle_read_event_rxthread(cthread &thread, int fd) {
       switch (optval) {
       case 0:
       case EISCONN: {
-        rxthread.drop_write_fd(sd);
+        thread->drop_write_fd(sd); // rx
 
         if ((getsockname(sd, laddr.ca_saddr, &(laddr.salen))) < 0) {
           throw eSysCall("eSysCall", "getsockname", __FILE__, __FUNCTION__,
@@ -1632,8 +1642,8 @@ void crofsock::handle_read_event_rxthread(cthread &thread, int fd) {
                 << " raddr=" << raddr.str();
 
         /* register socket descriptor for read operations */
-        rxthread.add_fd(sd);
-        rxthread.add_read_fd(sd);
+        thread->add_fd(sd);                                 // rx
+        thread->add_read_fd(sd, this, INT_TO_PTR(sock_rx)); // rx
 
         if (flag_test(FLAG_TLS_IN_USE)) {
           crofsock::tls_connect(flag_test(FLAG_RECONNECT_ON_FAILURE));
@@ -1641,7 +1651,7 @@ void crofsock::handle_read_event_rxthread(cthread &thread, int fd) {
           crofsock_env::call_env(env).handle_tcp_connected(*this);
         }
 
-        rxthread.wakeup();
+        thread->notify_wake(rx_wh); // rx
 
       } break;
       case EINPROGRESS: {
@@ -2465,3 +2475,5 @@ void crofsock::parse_of13_message(rofl::openflow::cofmsg **pmsg) {
 
   (*(*pmsg)).unpack(rxbuffer.somem(), msg_bytes_read);
 }
+
+} // namespace rofl

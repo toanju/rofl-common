@@ -16,9 +16,15 @@ using namespace rofl::openflow;
 
 CPPUNIT_TEST_SUITE_REGISTRATION(crofconntest);
 
-void crofconntest::setUp() {}
+void crofconntest::setUp() {
+  tclient.start("client");
+  tserver.start("server");
+}
 
-void crofconntest::tearDown() {}
+void crofconntest::tearDown() {
+  tclient.stop();
+  tserver.stop();
+}
 
 void crofconntest::test() {
   try {
@@ -34,8 +40,8 @@ void crofconntest::test() {
     xid_client = 0;
     xid_server = 0;
 
-    slisten = new rofl::crofsock(this);
-    sclient = new rofl::crofconn(this);
+    slisten = new rofl::crofsock(&tserver, this);
+    sclient = new rofl::crofconn(&tclient, this);
 
     listening_port = 0;
 
@@ -118,7 +124,7 @@ void crofconntest::handle_listen(rofl::crofsock &socket) {
       versionbitmap_ctl.add_ofp_version(rofl::openflow12::OFP_VERSION);
       versionbitmap_ctl.add_ofp_version(rofl::openflow13::OFP_VERSION);
 
-      sserver = new rofl::crofconn(this);
+      sserver = new rofl::crofconn(&tserver, this);
       sserver->tcp_accept(sd, versionbitmap_ctl,
                           rofl::crofconn::MODE_CONTROLLER);
 

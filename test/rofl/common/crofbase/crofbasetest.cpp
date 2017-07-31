@@ -38,10 +38,6 @@ void crofbasetest::test() {
   sleep(2);
 }
 
-void crofbasetest::handle_wakeup(rofl::cthread &thread) {}
-
-void crofbasetest::handle_timeout(rofl::cthread &thread, uint32_t timer_id) {}
-
 ccontroller::~ccontroller() {}
 
 ccontroller::ccontroller()

@@ -21,7 +21,7 @@ class crofchantest : public CppUnit::TestFixture,
                      public rofl::crofchan_env,
                      public rofl::crofconn_env,
                      public rofl::crofsock_env,
-                     public rofl::cthread_env {
+                     public rofl::cthread_timeout_event {
   CPPUNIT_TEST_SUITE(crofchantest);
   CPPUNIT_TEST(test_connections);
   CPPUNIT_TEST(test_congestion);
@@ -31,12 +31,11 @@ public:
   virtual ~crofchantest(){};
 
   crofchantest()
-      : num_of_pkts_sent(0), num_of_pkts_rcvd(0), thread(this),
-        max_congestion_rounds(16){};
+      : num_of_pkts_sent(0), num_of_pkts_rcvd(0), max_congestion_rounds(16){};
 
 public:
-  void setUp();
-  void tearDown();
+  void setUp() override;
+  void tearDown() override;
 
 public:
   void test_connections();
@@ -59,6 +58,8 @@ private:
   rofl::crofsock *rofsock;
   rofl::crofchan *channel1;
   rofl::crofchan *channel2;
+  rofl::cthread tchan1;
+  rofl::cthread tchan2;
   rofl::crwlock rwlock;
 
   rofl::crwlock plock;
@@ -67,8 +68,6 @@ private:
   std::atomic_int num_of_pkts_sent;
   std::atomic_int num_of_pkts_rcvd;
   std::atomic_bool congested;
-
-  rofl::cthread thread;
   std::atomic_int max_congestion_rounds;
 
 private:
@@ -76,47 +75,41 @@ private:
     TIMER_ID_START_SENDING_PACKET_INS = 1,
   };
 
-  virtual void handle_wakeup(rofl::cthread &thread){};
-
-  virtual void handle_timeout(rofl::cthread &thread, uint32_t timer_id);
-
-  virtual void handle_read_event(rofl::cthread &thread, int fd){};
-
-  virtual void handle_write_event(rofl::cthread &thread, int fd){};
+  void handle_timeout(void *userdata) override;
 
 private:
-  virtual void handle_established(rofl::crofchan &chan, uint8_t ofp_version) {
+  void handle_established(rofl::crofchan &chan, uint8_t ofp_version) override {
     std::cerr << "crofchan::handle_established" << std::endl;
   };
 
-  virtual void handle_closed(rofl::crofchan &chan) {
+  void handle_closed(rofl::crofchan &chan) override {
     std::cerr << "crofchan::handle_closed" << std::endl;
   };
 
-  virtual void handle_established(rofl::crofchan &chan, rofl::crofconn &conn,
-                                  uint8_t ofp_version);
+  void handle_established(rofl::crofchan &chan, rofl::crofconn &conn,
+                          uint8_t ofp_version) override;
 
-  virtual void handle_closed(rofl::crofchan &chan, rofl::crofconn &conn) {
+  void handle_closed(rofl::crofchan &chan, rofl::crofconn &conn) override {
     std::cerr << "crofchan::handle_closed" << std::endl;
   };
 
-  virtual void handle_connect_refused(rofl::crofchan &chan,
-                                      rofl::crofconn &conn) {
+  void handle_connect_refused(rofl::crofchan &chan,
+                              rofl::crofconn &conn) override {
     std::cerr << "crofchan::handle_connect_refused" << std::endl;
   };
 
-  virtual void handle_connect_failed(rofl::crofchan &chan,
-                                     rofl::crofconn &conn) {
+  void handle_connect_failed(rofl::crofchan &chan,
+                             rofl::crofconn &conn) override {
     std::cerr << "crofchan::handle_connect_failed" << std::endl;
   };
 
-  virtual void handle_accept_failed(rofl::crofchan &chan,
-                                    rofl::crofconn &conn) {
+  void handle_accept_failed(rofl::crofchan &chan,
+                            rofl::crofconn &conn) override {
     std::cerr << "crofchan::handle_accept_failed" << std::endl;
   };
 
-  virtual void handle_negotiation_failed(rofl::crofchan &chan,
-                                         rofl::crofconn &conn) {
+  void handle_negotiation_failed(rofl::crofchan &chan,
+                                 rofl::crofconn &conn) override {
     std::cerr << "crofchan::handle_negotiation_failed: pending_conns: "
               << pending_conns.size() << std::endl;
     std::cerr << ">>>>>>>>>>>>> auxid=" << (int)conn.get_auxid().get_id()
@@ -126,11 +119,11 @@ private:
     CPPUNIT_ASSERT(false);
   };
 
-  virtual void congestion_solved_indication(rofl::crofchan &chan,
-                                            rofl::crofconn &conn);
+  void congestion_solved_indication(rofl::crofchan &chan,
+                                    rofl::crofconn &conn) override;
 
-  virtual void handle_recv(rofl::crofchan &chan, rofl::crofconn &conn,
-                           rofl::openflow::cofmsg *msg);
+  void handle_recv(rofl::crofchan &chan, rofl::crofconn &conn,
+                   rofl::openflow::cofmsg *msg) override;
 
   virtual uint32_t get_async_xid(rofl::crofchan &chan) { return 0; };
 
@@ -143,118 +136,119 @@ private:
     std::cerr << "crofchan::release_sync_xid" << std::endl;
   };
 
-  virtual void congestion_occurred_indication(rofl::crofchan &chan,
-                                              rofl::crofconn &conn);
+  void congestion_occurred_indication(rofl::crofchan &chan,
+                                      rofl::crofconn &conn) override;
 
-  virtual void handle_transaction_timeout(rofl::crofchan &chan,
-                                          rofl::crofconn &conn, uint32_t xid,
-                                          uint8_t type, uint16_t sub_type = 0) {
+  void handle_transaction_timeout(rofl::crofchan &chan, rofl::crofconn &conn,
+                                  uint32_t xid, uint8_t type,
+                                  uint16_t sub_type = 0) override {
     std::cerr << "crofchan::handle_transaction_timeout" << std::endl;
   };
 
 private:
-  virtual void handle_established(rofl::crofconn &conn, uint8_t ofp_version);
+  void handle_established(rofl::crofconn &conn, uint8_t ofp_version) override;
 
-  virtual void handle_connect_refused(rofl::crofconn &conn) {
+  void handle_connect_refused(rofl::crofconn &conn) override {
     std::cerr << "crofconn::handle_connect_refused" << std::endl;
   };
 
-  virtual void handle_connect_failed(rofl::crofconn &conn) {
+  void handle_connect_failed(rofl::crofconn &conn) override {
     std::cerr << "crofconn::handle_connect_failed" << std::endl;
   };
 
-  virtual void handle_accept_failed(rofl::crofconn &conn) {
+  void handle_accept_failed(rofl::crofconn &conn) override {
     std::cerr << "crofconn::handle_accept_failed" << std::endl;
   };
 
-  virtual void handle_negotiation_failed(rofl::crofconn &conn) {
+  void handle_negotiation_failed(rofl::crofconn &conn) override {
     std::cerr << "crofconn::handle_negotiation_failed" << std::endl;
     std::cerr << ">>>>>>>>>>>>> auxid=" << (int)conn.get_auxid().get_id()
               << " <<<<<<<<<<<<<<" << std::endl;
     CPPUNIT_ASSERT(false);
   };
 
-  virtual void handle_closed(rofl::crofconn &conn) {
+  void handle_closed(rofl::crofconn &conn) override {
     std::cerr << "crofconn::handle_closed" << std::endl;
     std::cerr << ">>>>>>>>>>>>> auxid=" << (int)conn.get_auxid().get_id()
               << " <<<<<<<<<<<<<<" << std::endl;
     CPPUNIT_ASSERT(false);
   };
 
-  virtual void handle_recv(rofl::crofconn &conn, rofl::openflow::cofmsg *msg) {
+  void handle_recv(rofl::crofconn &conn, rofl::openflow::cofmsg *msg) override {
     std::cerr << "crofconn::handle_recv" << std::endl;
   };
 
-  virtual void congestion_occurred_indication(rofl::crofconn &conn) {
+  void congestion_occurred_indication(rofl::crofconn &conn) override {
     std::cerr << "crofconn::congestion_occurred_indication" << std::endl;
   };
 
-  virtual void congestion_solved_indication(rofl::crofconn &conn) {
+  void congestion_solved_indication(rofl::crofconn &conn) override {
     std::cerr << "crofconn::congestion_solved_indication" << std::endl;
   };
 
-  virtual void handle_transaction_timeout(rofl::crofconn &conn, uint32_t xid,
-                                          uint8_t type, uint16_t sub_type = 0) {
+  void handle_transaction_timeout(rofl::crofconn &conn, uint32_t xid,
+                                  uint8_t type,
+                                  uint16_t sub_type = 0) override {
     std::cerr << "crofconn::handle_transaction_timeout" << std::endl;
   };
 
 private:
-  virtual void handle_listen(rofl::crofsock &socket);
+  void handle_listen(rofl::crofsock &socket) override;
 
-  virtual void handle_tcp_connect_refused(rofl::crofsock &socket) {
+  void handle_tcp_connect_refused(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tcp_connect_refused" << std::endl;
   };
 
-  virtual void handle_tcp_connect_failed(rofl::crofsock &socket) {
+  void handle_tcp_connect_failed(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tcp_connect_failed" << std::endl;
   };
 
-  virtual void handle_tcp_connected(rofl::crofsock &socket) {
+  void handle_tcp_connected(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tcp_connected" << std::endl;
   };
 
-  virtual void handle_tcp_accept_refused(rofl::crofsock &socket) {
+  void handle_tcp_accept_refused(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tcp_accept_refused" << std::endl;
   };
 
-  virtual void handle_tcp_accept_failed(rofl::crofsock &socket) {
+  void handle_tcp_accept_failed(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tcp_accept_failed" << std::endl;
   };
 
-  virtual void handle_tcp_accepted(rofl::crofsock &socket) {
+  void handle_tcp_accepted(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tcp_accepted" << std::endl;
   };
 
-  virtual void handle_tls_connect_failed(rofl::crofsock &socket) {
+  void handle_tls_connect_failed(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tls_connect_failed" << std::endl;
   };
 
-  virtual void handle_tls_connected(rofl::crofsock &socket) {
+  void handle_tls_connected(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tls_connected" << std::endl;
   };
 
-  virtual void handle_tls_accept_failed(rofl::crofsock &socket) {
+  void handle_tls_accept_failed(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tls_accept_failed" << std::endl;
   };
 
-  virtual void handle_tls_accepted(rofl::crofsock &socket) {
+  void handle_tls_accepted(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_tls_accepted" << std::endl;
   };
 
-  virtual void handle_closed(rofl::crofsock &socket) {
+  void handle_closed(rofl::crofsock &socket) override {
     std::cerr << "crofsock::handle_closed" << std::endl;
   };
 
-  virtual void congestion_solved_indication(rofl::crofsock &socket) {
+  void congestion_solved_indication(rofl::crofsock &socket) override {
     std::cerr << "congestion_solved_indication" << std::endl;
   };
 
-  virtual void handle_recv(rofl::crofsock &socket,
-                           rofl::openflow::cofmsg *msg) {
+  void handle_recv(rofl::crofsock &socket,
+                   rofl::openflow::cofmsg *msg) override {
     std::cerr << "crofsock::handle_recv" << std::endl;
   };
 
-  virtual void congestion_occurred_indication(rofl::crofsock &socket) {
+  void congestion_occurred_indication(rofl::crofsock &socket) override {
     std::cerr << "crofsock::congestion_occurred_indication" << std::endl;
   };
 };

@@ -667,7 +667,7 @@ public:
    * for this object
    * @param ctlid rofl-common's internal identifier for this instance
    */
-  crofctl(crofctl_env *env, const cctlid &ctlid);
+  crofctl(cthread *thread, crofctl_env *env, const cctlid &ctlid);
 
 public:
   /**
