@@ -1428,6 +1428,7 @@ rofl::crofsock::msg_result_t crofdpt::send_port_mod_message(
     }
     return rofchan.send_message(auxid, msg);
 
+#if 0
     if (snoop) {
       if (ports.has_port(port_no)) {
         ports.set_port(port_no).set_hwaddr(hwaddr);
@@ -1436,6 +1437,7 @@ rofl::crofsock::msg_result_t crofdpt::send_port_mod_message(
         // TODO: mask
       }
     }
+#endif
 
   } catch (eRofConnNotConnected &e) {
     VLOG(1) << __FUNCTION__ << " dropping mesage " << e.what();
@@ -1462,10 +1464,12 @@ crofdpt::send_set_config_message(const rofl::cauxid &auxid, uint16_t flags,
     }
     return rofchan.send_message(auxid, msg);
 
+#if 0
     if (snoop) {
       this->flags = flags;
       this->miss_send_len = miss_send_len;
     }
+#endif
 
   } catch (eRofConnNotConnected &e) {
     VLOG(1) << __FUNCTION__ << " dropping mesage " << e.what();
