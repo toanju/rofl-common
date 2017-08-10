@@ -285,7 +285,7 @@ public:
   /**
    *
    */
-  virtual void close();
+  void close();
 
   /**
    *
